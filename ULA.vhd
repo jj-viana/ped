@@ -3,83 +3,75 @@ use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
 entity ULA is
-    port(
-        -- sinais de entrada externos (ativos em 0)
-        RESET_N  : in  std_logic;                       -- reset ativo baixo
-        A_IN     : in  std_logic_vector(3 downto 0);    -- operando A (ativos em 0)
-        B_IN     : in  std_logic_vector(3 downto 0);    -- operando B (ativos em 0)
-        SS_IN    : in  std_logic_vector(1 downto 0);    -- seleção de operação (ativos em 0)
-        -- saídas
-        F_OUT    : out std_logic_vector(3 downto 0);    -- resultado F
-        C_OUT    : out std_logic;                       -- carry out
-        OVERFLOW : out std_logic;                       -- detecção de overflow
-        S1_LED   : out std_logic;                       -- icone de seleção S1
-        S0_LED   : out std_logic                        -- icone de seleção S0
+    port (
+        RESET_N  : in  std_logic;                           -- ativo baixo
+        A_IN     : in  std_logic_vector(3 downto 0);        -- operando A (já invertido externamente, se necessário)
+        B_IN     : in  std_logic_vector(3 downto 0);        -- operando B
+        SS_IN    : in  std_logic_vector(1 downto 0);        -- seletor de operação ("00"=AND, "01"=OR, "10"=ADD, "11"=SUB)
+        F_OUT    : out std_logic_vector(3 downto 0);        -- resultado
+        C_OUT    : out std_logic;                           -- carry out
+        OVERFLOW : out std_logic;                           -- overflow
+        S1_LED   : out std_logic;                           -- indica SS_IN(1) ativo
+        S0_LED   : out std_logic                            -- indica SS_IN(0) ativo
     );
-end entity;
+end entity ULA;
 
-architecture Behavioral of ULA is
-    -- sinais internos (lógica positiva)
-    signal A, B    : signed(3 downto 0);
-    signal SS      : std_logic_vector(1 downto 0);
-    signal reset_i : std_logic;
-    signal sum5    : signed(4 downto 0);
-    signal diff5   : signed(4 downto 0);
+architecture rtl of ULA is
+    signal a, b    : signed(3 downto 0);
+    signal sum     : signed(4 downto 0);
+    signal result  : signed(3 downto 0);
+    signal carry   : std_logic;
+    signal ovf     : std_logic;
 begin
-    -- inverter entradas ativas em 0
-    reset_i <= not RESET_N;
-    A       <= signed(not A_IN);
-    B       <= signed(not B_IN);
-    SS      <= not SS_IN;
-
-    -- indicar seleção nas LEDs
-    S1_LED <= SS(1);
-    S0_LED <= SS(0);
-
-    alu_proc: process(reset_i, A, B, SS)
+    -- registros de reset síncrono
+    process(CLK: std_logic) is  -- se seu ULA usar clock interno, caso contrário remova este processo
     begin
-        if reset_i = '1' then
-            F_OUT    <= (others => '0');
-            C_OUT    <= '0';
-            OVERFLOW <= '0';
+        if rising_edge(CLK) then
+            if RESET_N = '0' then
+                F_OUT    <= (others => '0');
+                C_OUT    <= '0';
+                OVERFLOW <= '0';
+                S1_LED   <= '1';
+                S0_LED   <= '1';
+            else
+                -- mapear entradas ao tipo signed (inverte bit a bit se necessário fora daqui)
+                a <= signed(A_IN);
+                b <= signed(B_IN);
 
-        else
-            case SS is
-                -- soma A + B
-                when "00" =>
-                    sum5      <= signed('0' & A) + signed('0' & B);
-                    F_OUT     <= std_logic_vector(sum5(3 downto 0));
-                    C_OUT     <= sum5(4);
-                    OVERFLOW  <= (A(3) and B(3) and not sum5(3))
-                               or (not A(3) and not B(3) and sum5(3));
+                -- operação selecionada
+                case SS_IN is
+                    when "00" =>
+                        result <= a and b;
+                        carry  <= '0';
+                        ovf    <= '0';
+                    when "01" =>
+                        result <= a or b;
+                        carry  <= '0';
+                        ovf    <= '0';
+                    when "10" =>  -- soma
+                        sum    <= ('0' & a) + ('0' & b);
+                        result <= sum(3 downto 0);
+                        carry  <= sum(4);
+                        -- overflow: sinais de carry nos bits 2 e 3 diferem
+                        ovf    <= sum(3) xor sum(4);
+                    when "11" =>  -- subtração A - B = A + (-B)
+                        sum    <= ('0' & a) + ('0' & not b) + 1;
+                        result <= sum(3 downto 0);
+                        carry  <= sum(4);
+                        ovf    <= sum(3) xor sum(4);
+                    when others =>
+                        result <= (others => '0');
+                        carry  <= '0';
+                        ovf    <= '0';
+                end case;
 
-                -- subtração A - B
-                when "01" =>
-                    diff5     <= signed('0' & A) - signed('0' & B);
-                    F_OUT     <= std_logic_vector(diff5(3 downto 0));
-                    C_OUT     <= diff5(4);
-                    OVERFLOW  <= (A(3) and not B(3) and not diff5(3))
-                               or (not A(3) and B(3) and diff5(3));
-
-                -- operação AND
-                when "10" =>
-                    F_OUT    <= std_logic_vector(A and B);
-                    C_OUT    <= '0';
-                    OVERFLOW <= '0';
-
-                -- operação OR
-                when "11" =>
-                    F_OUT    <= std_logic_vector(A or B);
-                    C_OUT    <= '0';
-                    OVERFLOW <= '0';
-
-                when others =>
-                    -- situação não usada
-                    F_OUT    <= (others => '0');
-                    C_OUT    <= '0';
-                    OVERFLOW <= '0';
-            end case;
+                -- sinais de saída
+                F_OUT    <= std_logic_vector(result);
+                C_OUT    <= carry;
+                OVERFLOW <= ovf;
+                S1_LED   <= SS_IN(1);
+                S0_LED   <= SS_IN(0);
+            end if;
         end if;
     end process;
-
-end architecture;
+end architecture rtl;
